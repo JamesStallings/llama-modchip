@@ -420,10 +420,8 @@ class ThinkBlockFilter:
 
         if t in ("message_delta", "message_stop"):
             out = []
-            if not getattr(self, "flushed_at_end", False):
-                self.flushed_at_end = True
-                flush_evs = self._flush_normalizer()
-                out.extend(flush_evs)
+            flush_evs = self._flush_normalizer()
+            out.extend(flush_evs)
             if t == "message_delta":
                 if self.has_tool_call:
                     ev.setdefault("delta", {})["stop_reason"] = "tool_use"
@@ -628,6 +626,9 @@ class ThinkBlockFilter:
         return out
 
     def _flush_normalizer(self):
+        if getattr(self, "flushed_at_end", False):
+            return []
+        self.flushed_at_end = True
         out = []
         if self.state == "THINKING":
             if self.buf and self.mode != "no":
@@ -1535,7 +1536,16 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.path = norm_path
         if not self._check_auth():
             return
-        length = int(self.headers.get("Content-Length", 0))
+        max_body_bytes = int(os.environ.get("GATEWAY_MAX_BODY_BYTES", str(64 * 1024 * 1024)))
+        raw_cl = self.headers.get("Content-Length", "0")
+        try:
+            length = int(raw_cl)
+        except ValueError:
+            self._send_json_error(400, "Invalid Content-Length header")
+            return
+        if length < 0 or length > max_body_bytes:
+            self._send_json_error(413, f"Payload size {length} outside allowed bounds [0, {max_body_bytes}]")
+            return
         body_bytes = self.rfile.read(length) if length else b""
 
         # Session tracking: bind session header and client IP
@@ -1682,17 +1692,28 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 # Normalize Anthropic tool calling for llama-server
                 normalize_anthropic_messages(messages)
 
-                # Intercept ALL Claude Code background utility probes (no tools or stream=False background forks) so they never overwrite or block Slot 0
+                # Intercept Claude Code background utility probes (topic/title classifiers, file-path extractors,
+                # or explicit GATEWAY_INTERCEPT_ALL_PROBES=1) so they never overwrite or block Slot 0,
+                # while still forwarding legitimate non-streaming or tool-less /v1/messages requests.
                 is_direct = self.headers.get("X-Direct") or self.headers.get("X-Vex-Direct")
                 is_prewarm = self.headers.get("X-Prewarm") or self.headers.get("X-Vex-Prewarm")
                 if (not data.get("tools") or not is_stream) and not is_direct and not is_prewarm:
                     raw_str = json.dumps(data)
-                    if "isNewTopic" in raw_str:
-                        self._send_anthropic_text_response('{"isNewTopic": false, "title": "Session"}', is_stream=is_stream)
-                    else:
-                        self._send_anthropic_text_response("OK", is_stream=is_stream)
-                    print(f"[Gateway] [{log_sess}] Intercepted background probe (tools={bool(data.get('tools'))}, stream={is_stream}) locally (0ms, Slot 0 preserved)", flush=True)
-                    return
+                    is_claude_bg_probe = (
+                        os.environ.get("GATEWAY_INTERCEPT_ALL_PROBES") == "1"
+                        or "isNewTopic" in raw_str
+                        or "Please write a 5-10 word title" in raw_str
+                        or "Analyze if this message indicates a new conversation topic" in raw_str
+                        or "Extract any file paths" in raw_str
+                        or "claude_code_bg_probe" in raw_str
+                    )
+                    if is_claude_bg_probe:
+                        if "isNewTopic" in raw_str:
+                            self._send_anthropic_text_response('{"isNewTopic": false, "title": "Session"}', is_stream=is_stream)
+                        else:
+                            self._send_anthropic_text_response("OK", is_stream=is_stream)
+                        print(f"[Gateway] [{log_sess}] Intercepted background probe (tools={bool(data.get('tools'))}, stream={is_stream}) locally (0ms, Slot 0 preserved)", flush=True)
+                        return
 
                 # Preserve pre-extracted memory blocks if replaying from claude_warmup_payload.json
                 if not extracted_memory_blocks and isinstance(data.get("_ preserved_memory"), list):
@@ -1913,8 +1934,23 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
         url = target_upstream + self.path
         req_headers = {}
+        drop_headers = {
+            "host",
+            "content-length",
+            "connection",
+            "keep-alive",
+            "transfer-encoding",
+            "te",
+            "trailer",
+            "upgrade",
+            "proxy-authorization",
+            "proxy-authenticate",
+            "accept-encoding",
+        }
+        if GATEWAY_API_KEY:
+            drop_headers.update({"authorization", "x-api-key"})
         for k, v in self.headers.items():
-            if k.lower() not in ("host", "content-length", "connection", "accept-encoding"):
+            if k.lower() not in drop_headers:
                 req_headers[k] = v
         req_headers["Accept-Encoding"] = "identity"
 

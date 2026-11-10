@@ -7,7 +7,10 @@ Validates lookup latency (<0.01 ms), zero-copy POSIX shm, and zero-prefill agent
 import time
 import os
 import random
-from harp_cache import HARPCacheEngine, hash_token_block, fnv1a_64
+try:
+    from kv_cache.harp_cache import HARPCacheEngine, hash_token_block, fnv1a_64
+except ImportError:
+    from harp_cache import HARPCacheEngine, hash_token_block, fnv1a_64
 
 def test_fnv1a_throughput():
     print("\n--- TEST 1: FNV-64 Hash Cascade Throughput ---")
@@ -122,7 +125,17 @@ def test_radix_intermediate_eviction_and_collision():
     engine.close()
     if os.path.exists("/dev/shm/harp_kv_cache_test_lru.bin"):
         os.remove("/dev/shm/harp_kv_cache_test_lru.bin")
-    print("[+] TEST 3 PASSED: Intermediate Radix Eviction & Subtree Preservation Verified.")
+
+    # Verify deep (>1,100 pages) prefix chain eviction does not hit RecursionError
+    deep_engine = HARPCacheEngine(shm_path="/dev/shm/harp_kv_cache_test_deep.bin", max_pages=1100)
+    deep_tokens = [10000 + i for i in range(1150 * 32)]
+    deep_engine.store_prefix(deep_tokens)
+    assert len(deep_engine.hash_to_page) == 1100
+    assert deep_engine.evictions == 50
+    deep_engine.close()
+    if os.path.exists("/dev/shm/harp_kv_cache_test_deep.bin"):
+        os.remove("/dev/shm/harp_kv_cache_test_deep.bin")
+    print("[+] TEST 3 PASSED: Intermediate & Deep-Chain Radix Eviction Verified.")
 
 if __name__ == "__main__":
     print("=" * 80)

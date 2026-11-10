@@ -139,27 +139,35 @@ class HARPCacheEngine:
         unique_tokens = len(set(tokens))
         return float(unique_tokens) / float(len(tokens))
 
-    def _prune_radix_hash(self, node: Dict[int, Dict[str, Any]], target_hash: int) -> None:
+    def _prune_radix_hash(self, root_node: Dict[int, Dict[str, Any]], target_hash: int) -> None:
         """
-        Recursively removes an evicted page_hash from the Radix Tree without
-        destroying active descendant subtrees:
-        - Traverses children first (bottom-up cleanup).
+        Iteratively removes an evicted page_hash from the Radix Tree without
+        destroying active descendant subtrees or hitting Python's recursion limit
+        on deep prefix chains (> 1,000 pages):
+        - Traverses children bottom-up using an explicit stack.
         - If `node[target_hash]["children"]` is non-empty, sets `node[target_hash]["page"] = None`
           so descendant suffix pages remain attached to the Radix Tree.
         - Only deletes `node[target_hash]` when `"children"` is empty.
         """
-        for child_hash, child_entry in list(node.items()):
-            children = child_entry.get("children")
-            if children:
-                self._prune_radix_hash(children, target_hash)
-            if child_hash != target_hash and child_entry.get("page") is None and not children:
-                del node[child_hash]
-
-        if target_hash in node:
-            if node[target_hash].get("children"):
-                node[target_hash]["page"] = None
+        stack: List[Tuple[Dict[int, Dict[str, Any]], bool]] = [(root_node, False)]
+        while stack:
+            node, visited_children = stack.pop()
+            if not visited_children:
+                stack.append((node, True))
+                for child_entry in node.values():
+                    children = child_entry.get("children")
+                    if children:
+                        stack.append((children, False))
             else:
-                del node[target_hash]
+                for child_hash, child_entry in list(node.items()):
+                    children = child_entry.get("children")
+                    if child_hash != target_hash and child_entry.get("page") is None and not children:
+                        del node[child_hash]
+                if target_hash in node:
+                    if node[target_hash].get("children"):
+                        node[target_hash]["page"] = None
+                    else:
+                        del node[target_hash]
 
     def _acquire_physical_page_id(self) -> int:
         """
@@ -180,8 +188,8 @@ class HARPCacheEngine:
             self.hash_to_page.keys(),
             key=lambda k: (self.hash_to_page[k].last_accessed, self.hash_to_page[k].access_count),
         )
-        evicted_page = self.hash_to_page.pop(lru_hash)
         self._prune_radix_hash(self.radix_root, lru_hash)
+        evicted_page = self.hash_to_page.pop(lru_hash)
         self.evictions += 1
         return evicted_page.page_id
 
@@ -256,8 +264,8 @@ class HARPCacheEngine:
                 else:
                     if existing is not None:
                         # 64-bit hash collision with distinct token block: evict & recycle colliding entry cleanly
-                        colliding_page = self.hash_to_page.pop(h)
                         self._prune_radix_hash(self.radix_root, h)
+                        colliding_page = self.hash_to_page.pop(h)
                         self.free_page_ids.append(colliding_page.page_id)
                         self.evictions += 1
 

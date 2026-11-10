@@ -13,6 +13,7 @@ extern void dequantize_row_iq2_xxs(const void * x, float * y, int64_t k);
 extern void dequantize_row_iq3_xxs(const void * x, float * y, int64_t k);
 extern void dequantize_row_mxfp4(const void * x, float * y, int64_t k);
 extern void dequantize_row_iq1_s(const void * x, float * y, int64_t k);
+extern void dequantize_row_iq1_m(const void * x, float * y, int64_t k);
 
 extern void quantize_row_q2_0_ref(const float * x, void * y, int64_t k);
 extern size_t quantize_iq1_s(const float * src, void * dst, int64_t nrow, int64_t n_per_row, const float * quant_weights);
@@ -37,9 +38,13 @@ void transcode_q8_0_to_q2_0(const uint8_t * src, uint8_t * dst, int64_t nrow, in
     dsv4_init();
     const int64_t src_row_bytes = (ncol / 32) * 34;
     const int64_t dst_row_bytes = (ncol / 64) * 30;
-    #pragma omp parallel num_threads(32)
+    #pragma omp parallel
     {
-        float * f32 = (float *)malloc(ncol * sizeof(float));
+        float * f32 = (float *)malloc((size_t)ncol * sizeof(float));
+        if (!f32) {
+            fprintf(stderr, "FATAL: malloc failed in transcode_q8_0_to_q2_0\n");
+            abort();
+        }
         #pragma omp for schedule(static)
         for (int64_t r = 0; r < nrow; ++r) {
             dequantize_row_q8_0(src + r * src_row_bytes, f32, ncol);
@@ -56,8 +61,12 @@ static void dequant_expert_slice(const uint8_t * src, int src_type, float * dst,
         dequantize_row_iq3_xxs(src, dst, n_elem);
     } else if (src_type == 19) {
         dequantize_row_iq1_s(src, dst, n_elem);
+    } else if (src_type == 29) {
+        dequantize_row_iq1_m(src, dst, n_elem);
     } else if (src_type == 39) {
         dequantize_row_mxfp4(src, dst, n_elem);
+    } else {
+        memset(dst, 0, (size_t)n_elem * sizeof(float));
     }
 }
 
@@ -85,12 +94,16 @@ void transcode_moe_exps(
     const int64_t gate_eb = (gate_src && up_src) ? expert_bytes(gate_type, n_elem) : 0;
     const int64_t up_eb   = (gate_src && up_src) ? expert_bytes(up_type,   n_elem) : 0;
 
-    #pragma omp parallel num_threads(32)
+    #pragma omp parallel
     {
-        float * f32  = (float *)malloc(n_elem * sizeof(float));
-        float * fg   = (gate_src && up_src) ? (float *)malloc(n_elem * sizeof(float)) : NULL;
-        float * fu   = (gate_src && up_src) ? (float *)malloc(n_elem * sizeof(float)) : NULL;
-        float * qw   = (float *)malloc(ncol * sizeof(float));
+        float * f32  = (float *)malloc((size_t)n_elem * sizeof(float));
+        float * fg   = (gate_src && up_src) ? (float *)malloc((size_t)n_elem * sizeof(float)) : NULL;
+        float * fu   = (gate_src && up_src) ? (float *)malloc((size_t)n_elem * sizeof(float)) : NULL;
+        float * qw   = (float *)malloc((size_t)ncol * sizeof(float));
+        if (!f32 || !qw || ((gate_src && up_src) && (!fg || !fu))) {
+            fprintf(stderr, "FATAL: malloc failed in transcode_moe_exps\n");
+            abort();
+        }
 
         #pragma omp for schedule(dynamic, 1)
         for (int64_t e = 0; e < n_exp; ++e) {

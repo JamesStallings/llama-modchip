@@ -168,10 +168,14 @@ fi
 
 if [[ -f "$MODEL_PATH" ]]; then
     echo "[+] Found existing GGUF model: $MODEL_PATH"
+elif [[ "$MODEL_EXPLICIT" == "1" ]]; then
+    echo "[!] ERROR: Explicit --model file not found: $MODEL_PATH" >&2
+    exit 1
 elif [[ "$SKIP_MODEL" == "1" ]]; then
     echo "[i] --skip-model specified. Skipping 18.9 GB download."
     echo "    Place your GGUF at: $MODEL_PATH"
 else
+    mkdir -p "$(dirname "$MODEL_PATH")"
     echo "[*] Downloading ${DEFAULT_MODEL_NAME} from Hugging Face (pinned revision ${MODEL_REV:0:12})..."
     echo "    URL:    ${HF_MODEL_URL}"
     echo "    SHA256: ${MODEL_SHA256}"
@@ -180,9 +184,10 @@ else
     echo "[*] Verifying SHA-256 checksum..."
     ACTUAL_SHA256="$(sha256sum "${MODEL_PATH}.part" | awk '{print $1}')"
     if [[ "$ACTUAL_SHA256" != "$MODEL_SHA256" ]]; then
-        echo "[!] ERROR: SHA-256 mismatch for ${MODEL_PATH}.part!" >&2
+        echo "[!] ERROR: SHA-256 mismatch for ${MODEL_PATH}.part (removing corrupt partial file)!" >&2
         echo "    Expected: $MODEL_SHA256" >&2
         echo "    Got:      $ACTUAL_SHA256" >&2
+        rm -f "${MODEL_PATH}.part"
         exit 1
     fi
     mv "${MODEL_PATH}.part" "$MODEL_PATH"
@@ -201,7 +206,7 @@ if [[ -f "$MODEL_PATH" ]]; then
         # Repeat repository source, docs, and agent tool schemas to build strong priors
         for _ in 1 2 3 4 5; do
             find "$REPO_ROOT" -maxdepth 3 -type f \( -name "*.cpp" -o -name "*.h" -o -name "*.py" -o -name "*.md" -o -name "*.sh" -o -name "*.jinja" \) \
-                -not -path "*/.git/*" -not -path "*/workspace/*" -exec cat {} + 2>/dev/null || true
+                -not -path "*/.git/*" -not -path "${REPO_ROOT}/workspace/*" -not -path "${WORKSPACE_DIR}/*" -exec cat {} + 2>/dev/null || true
         done
         if [[ -n "$USER_CORPUS_DIR" && -d "$USER_CORPUS_DIR" ]]; then
             echo "[*] Including custom codebase from $USER_CORPUS_DIR..." >&2
@@ -275,8 +280,9 @@ else
     CTX_SIZE=65536
 fi
 
+mkdir -p "${WORKSPACE_DIR}/run"
+printf '%s\n' "${SERVER_PORT}" > "${WORKSPACE_DIR}/run/server_port"
 if [[ "$MODEL_EXPLICIT" == "1" ]]; then
-    mkdir -p "${WORKSPACE_DIR}/run"
     case "$MODEL_PATH" in
         /*) MODEL_ABS="$MODEL_PATH" ;;
         *)  MODEL_ABS="${PWD}/${MODEL_PATH}" ;;
@@ -303,7 +309,7 @@ fi
 # engage architecture safety locks (e.g. Interleaved 3:1 SWA on Pure GQA), and write /dev/shm/llama_modchip.bin
 python3 "${REPO_ROOT}/scripts/llama_modchip.py" --model "\$MODEL" --apply-shm
 
-eval "\$(python3 - "\$MODEL" <<'PYEOF'
+PROFILE_ENV="\$(python3 - "\$MODEL" <<'PYEOF'
 import sys
 sys.path.insert(0, "${REPO_ROOT}/scripts")
 import llama_modchip as mc
@@ -322,23 +328,25 @@ print(f"export LLAMA_RC_CERT_D2=\${{LLAMA_RC_CERT_D2:-{prof.rc_cert_d2}}}")
 if prof.moe_top_k > 0:
     print(f"export LLAMA_MOE_TOP_K=\${{LLAMA_MOE_TOP_K:-{prof.moe_top_k}}}")
 print(f"export OMP_PROC_BIND=\${{OMP_PROC_BIND:-{hw.omp_proc_bind}}}")
-print(f"export OMP_PLACES=cores")
+print(f"export OMP_PLACES=\${{OMP_PLACES:-cores}}")
 print(f'export TASKSET_MASK="\${{TASKSET_MASK:-{hw.taskset_mask}}}"')
 print(f"export DECODE_THREADS=\${{DECODE_THREADS:-{hw.decode_threads}}}")
 print(f"export BATCH_THREADS=\${{BATCH_THREADS:-{hw.batch_threads}}}")
 PYEOF
-)"
+)" || exit 1
+eval "\$PROFILE_ENV"
 
 SERVER_HOST="\${SERVER_HOST:-${SERVER_HOST}}"
+SERVER_PORT="\${SERVER_PORT:-${SERVER_PORT}}"
 # Optional space-separated extra llama-server flags (no nested quotes), e.g. EXTRA_SERVER_ARGS="-ngl 99 --n-cpu-moe 44"
 EXTRA_ARGS_ARR=()
 if [[ -n "\${EXTRA_SERVER_ARGS:-}" ]]; then
     read -r -a EXTRA_ARGS_ARR <<< "\${EXTRA_SERVER_ARGS}"
 fi
-echo "[*] Starting llama-server on http://\${SERVER_HOST}:${SERVER_PORT} (Decode: \${DECODE_THREADS}T / Prefill: \${BATCH_THREADS}T [mask: \${TASKSET_MASK}], Context: ${CTX_SIZE})..."
+echo "[*] Starting llama-server on http://\${SERVER_HOST}:\${SERVER_PORT} (Decode: \${DECODE_THREADS}T / Prefill: \${BATCH_THREADS}T [mask: \${TASKSET_MASK}], Context: ${CTX_SIZE})..."
 exec taskset -c "\${TASKSET_MASK}" "${WORKSPACE_DIR}/bin/llama-server-nemotron" \\
   --model "\$MODEL" \\
-  --port "${SERVER_PORT}" \\
+  --port "\${SERVER_PORT}" \\
   --host "\${SERVER_HOST}" \\
   --no-webui \\
   --offline \\

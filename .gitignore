@@ -8,4 +8,6 @@ start_gateway.sh
 *.bin
 *warmup*
 __pycache__/
+.pytest_cache/
 *.pyc
+vq3/bench_avx512_vq3

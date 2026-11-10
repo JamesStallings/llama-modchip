@@ -19,9 +19,13 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="${WORKSPACE_DIR:-${REPO_ROOT}/workspace}"
+PID_DIR="${WORKSPACE_DIR}/run"
+SERVER_PORT_FILE="${PID_DIR}/server_port"
+if [[ -z "${SERVER_PORT:-}" ]] && [[ -f "$SERVER_PORT_FILE" ]]; then
+    SERVER_PORT="$(head -n 1 "$SERVER_PORT_FILE" 2>/dev/null | tr -d '[:space:]')"
+fi
 SERVER_PORT="${SERVER_PORT:-8789}"
 GATEWAY_PORT="${GATEWAY_PORT:-8787}"
-PID_DIR="${WORKSPACE_DIR}/run"
 SERVER_PID_FILE="${PID_DIR}/server.pid"
 GATEWAY_PID_FILE="${PID_DIR}/gateway.pid"
 GATEWAY_HOST_FILE="${PID_DIR}/gateway_host"
@@ -258,15 +262,30 @@ cmd_start() {
     local probe_server_host="$SERVER_HOST"
     [[ "$probe_server_host" == "0.0.0.0" ]] && probe_server_host="127.0.0.1"
     echo -ne "${CYAN}[*] Waiting for model weights to load & AVX-512/AVX2 repacking (logs: workspace/logs/server.log)...${RESET}"
+    local ready=0
+    local srv_pid=""
+    [[ -f "$SERVER_PID_FILE" ]] && srv_pid="$(cat "$SERVER_PID_FILE" 2>/dev/null || true)"
     for _ in $(seq 1 90); do
-        if curl -sf "http://${probe_server_host}:${SERVER_PORT}/health" >/dev/null 2>&1; then
+        if curl -sf --max-time 2 "http://${probe_server_host}:${SERVER_PORT}/health" >/dev/null 2>&1; then
             echo -e " ${GREEN}${BOLD}READY!${RESET}"
+            ready=1
             break
+        fi
+        if [[ -n "$srv_pid" ]] && ! kill -0 "$srv_pid" 2>/dev/null; then
+            echo -e " ${YELLOW}${BOLD}FAILED!${RESET}"
+            echo -e "${YELLOW}[!] llama-server (pid ${srv_pid}) exited during startup. Last log lines:${RESET}" >&2
+            tail -n 25 "${WORKSPACE_DIR}/logs/server.log" >&2 2>/dev/null || true
+            return 1
         fi
         echo -n "."
         sleep 1
     done
     echo ""
+    if [[ "$ready" -eq 0 ]]; then
+        echo -e "${YELLOW}[!] Timed out waiting for llama-server on http://${probe_server_host}:${SERVER_PORT}/health. Last log lines:${RESET}" >&2
+        tail -n 25 "${WORKSPACE_DIR}/logs/server.log" >&2 2>/dev/null || true
+        return 1
+    fi
 
     echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════════════════════╗${RESET}"
     echo -e "${BOLD}${GREEN}║ ♟️  llama-modchip v2.4.0 is LIVE! Choose how you want to interact:           ║${RESET}"
@@ -281,12 +300,14 @@ cmd_start() {
 
 cmd_stop() {
     local stopped=0
+    local pids_to_wait=()
     for pf in "$GATEWAY_PID_FILE" "$SERVER_PID_FILE"; do
         if [[ -f "$pf" ]]; then
             local pid
             pid="$(cat "$pf" 2>/dev/null || true)"
             if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
                 kill "$pid" 2>/dev/null || true
+                pids_to_wait+=("$pid")
                 stopped=1
             fi
             rm -f "$pf"
@@ -295,8 +316,28 @@ cmd_stop() {
     rm -f "$GATEWAY_HOST_FILE"
     local esc_repo
     esc_repo="$(printf '%s' "$REPO_ROOT" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
-    pkill -u "$(id -u)" -f "llama-server-nemotron" 2>/dev/null && stopped=1 || true
+    local esc_ws
+    esc_ws="$(printf '%s' "$WORKSPACE_DIR" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
+    pkill -u "$(id -u)" -f "${esc_ws}/bin/llama-server-nemotron" 2>/dev/null && stopped=1 || true
     pkill -u "$(id -u)" -f "(^|/)[Pp]ython[0-9.]* .*${esc_repo}/gateway/sse_gateway\.py" 2>/dev/null && stopped=1 || true
+    if [[ "${#pids_to_wait[@]}" -gt 0 ]]; then
+        for _ in $(seq 1 20); do
+            local alive=0
+            for wp in "${pids_to_wait[@]}"; do
+                if kill -0 "$wp" 2>/dev/null; then
+                    alive=1
+                    break
+                fi
+            done
+            [[ "$alive" -eq 0 ]] && break
+            sleep 0.25
+        done
+        for wp in "${pids_to_wait[@]}"; do
+            if kill -0 "$wp" 2>/dev/null; then
+                kill -9 "$wp" 2>/dev/null || true
+            fi
+        done
+    fi
     if [[ "$stopped" -eq 1 ]]; then
         echo -e "${GREEN}[✓] Stopped llama-server and sse_gateway.${RESET}"
     else
@@ -427,7 +468,7 @@ cmd_claude() {
 
 cmd_tui() {
     local model="${1:-$DEFAULT_MODEL}"
-    exec python3 "${REPO_ROOT}/scripts/llama_modchip.py" --model "$model" --tui
+    exec python3 "${REPO_ROOT}/scripts/llama_modchip.py" --model "$model" --port "$SERVER_PORT" --tui
 }
 
 cmd_help() {

@@ -23,7 +23,9 @@ import json
 import math
 import os
 import re
+import shlex
 import shutil
+import stat
 import struct
 import subprocess
 import sys
@@ -603,6 +605,30 @@ def compute_modchip_profile(hw: HardwareInfo, model: GGUFModelInfo, swa_override
         ),
     ]
 
+    # Honor explicit user environment variable overrides (env > computed profile)
+    def _env_int(name: str, default: int) -> int:
+        val = os.environ.get(name)
+        if val is not None and val.strip() != "":
+            try:
+                return int(val.strip())
+            except ValueError:
+                pass
+        return default
+
+    l3_window = _env_int("LLAMA_KV_L3_WINDOW", l3_window)
+    attn_window = _env_int("LLAMA_ATTN_WINDOW", attn_window)
+    attn_sinks = _env_int("LLAMA_ATTN_SINKS", attn_sinks)
+    swa_stride = _env_int("LLAMA_SWA_STRIDE", swa_stride)
+    disable_chunking = _env_int(
+        "LLAMA_DISABLE_CHUNKING",
+        _env_int("LLAMA_KV_DISABLE_CHUNKING", disable_chunking),
+    )
+    if os.environ.get("LLAMA_RC_DISABLE", "").strip() in ("1", "true", "TRUE"):
+        rc_enabled = 0
+    else:
+        rc_enabled = _env_int("LLAMA_RC_ENABLED", rc_enabled)
+    moe_top_k = _env_int("LLAMA_MOE_TOP_K", moe_top_k)
+
     return ModchipProfile(
         hw=hw,
         model=model,
@@ -622,8 +648,13 @@ def compute_modchip_profile(hw: HardwareInfo, model: GGUFModelInfo, swa_override
     )
 
 
-def write_modchip_shm(prof: ModchipProfile, shm_path: str = SHM_PATH) -> None:
-    """Packs the live-tunable Modchip parameters atomically (mode 0600) into XDG_RUNTIME_DIR and /dev/shm."""
+def write_modchip_shm(prof: ModchipProfile, shm_path: str = SHM_PATH) -> List[str]:
+    """
+    Packs the live-tunable Modchip parameters (mode 0600) into XDG_RUNTIME_DIR and /dev/shm.
+    Writes in-place (`pwrite` on the existing regular file inode) so a running `llama-server`
+    holding `mmap(MAP_SHARED)` sees live TUI updates immediately without inode replacement.
+    Returns list of paths successfully written.
+    """
     payload = struct.pack(
         "<IIiiiiiiiiii",
         SHM_MAGIC,
@@ -639,21 +670,38 @@ def write_modchip_shm(prof: ModchipProfile, shm_path: str = SHM_PATH) -> None:
         prof.rc_cert_d2,
         prof.moe_top_k,
     )
+    written: List[str] = []
+    open_flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    uid = os.getuid()
+
     for target in get_shm_paths(shm_path):
         parent = os.path.dirname(target) or "/dev/shm"
         if not os.path.isdir(parent) or not os.access(parent, os.W_OK):
             continue
-        fd, tmp_path = tempfile.mkstemp(prefix=".llama_modchip_", dir=parent)
+        fd = -1
         try:
+            fd = os.open(target, open_flags, 0o600)
+            st = os.fstat(fd)
+            if not stat.S_ISREG(st.st_mode) or st.st_uid != uid:
+                continue
             os.fchmod(fd, 0o600)
-            with os.fdopen(fd, "wb") as f:
-                f.write(payload)
-            os.replace(tmp_path, target)
+            if st.st_size != len(payload):
+                os.ftruncate(fd, len(payload))
+            if hasattr(os, "pwrite"):
+                os.pwrite(fd, payload, 0)
+            else:
+                os.lseek(fd, 0, os.SEEK_SET)
+                os.write(fd, payload)
+            written.append(target)
         except OSError:
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
+            continue
+        finally:
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+    return written
 
 
 def _detect_default_server_bin() -> str:
@@ -673,7 +721,7 @@ def _detect_default_server_bin() -> str:
 def build_launch_command(
     prof: ModchipProfile,
     server_bin: Optional[str] = None,
-    port: int = 8001,
+    port: int = 8789,
 ) -> str:
     resolved_bin = server_bin or _detect_default_server_bin()
     env_parts = [
@@ -698,8 +746,8 @@ def build_launch_command(
     cmd_parts = [
         " ".join(env_parts),
         f"taskset -c {prof.hw.taskset_mask}",
-        resolved_bin,
-        f"--model {prof.model.path}",
+        shlex.quote(resolved_bin),
+        f"--model {shlex.quote(prof.model.path)}",
         f"--host 127.0.0.1 --port {port} --no-webui --offline",
         f"-c {ctx_target} -np 1",
         f"-t {t_dec} -tb {t_bat}",
@@ -1019,7 +1067,8 @@ def main() -> int:
     parser.add_argument("--print-cmd", action="store_true", help="Print the optimal llama-server launch command")
     parser.add_argument("--bench", action="store_true", help="Run 1-command A/B benchmark (Stock vs llama-modchip) via llama-bench")
     parser.add_argument("--bench-bin", type=str, default=None, help="Optional path to llama-bench binary for --bench")
-    parser.add_argument("--port", type=int, default=8001, help="llama-server port for --print-cmd and --tui live telemetry (default: 8001)")
+    default_port = int(os.environ.get("SERVER_PORT", "8789"))
+    parser.add_argument("--port", type=int, default=default_port, help=f"llama-server port for --print-cmd and --tui live telemetry (default: {default_port})")
     parser.add_argument("--swa", type=int, default=0, help="Opt-in approximate Sliding Window Attention size in tokens (default: 0 = full exact attention)")
     parser.add_argument("--json", action="store_true", help="Output profile as JSON")
     parser.add_argument("--tui", action="store_true", help="Launch interactive Priiloader Curses TUI")
@@ -1047,8 +1096,12 @@ def main() -> int:
     info = inspect_gguf(args.model)
     prof = compute_modchip_profile(hw, info, swa_override=args.swa)
 
+    written_shm: List[str] = []
     if args.apply_shm:
-        write_modchip_shm(prof)
+        written_shm = write_modchip_shm(prof)
+        if not written_shm:
+            print("[ERROR] Failed to write Modchip SHM block to any runtime directory.", file=sys.stderr)
+            return 1
 
     if args.tui:
         run_tui(prof, port=args.port)
@@ -1076,8 +1129,9 @@ def main() -> int:
         return 0
 
     print_profile_report(prof)
-    if args.apply_shm:
-        print(f"\n[SHM LIVE HOOK] Wrote {os.path.getsize(SHM_PATH)} bytes to {SHM_PATH} (magic=0x{SHM_MAGIC:08X})")
+    if args.apply_shm and written_shm:
+        primary_shm = written_shm[0]
+        print(f"\n[SHM LIVE HOOK] Wrote {os.path.getsize(primary_shm)} bytes to {', '.join(written_shm)} (magic=0x{SHM_MAGIC:08X})")
     if args.print_cmd:
         print("\n[AUTO-GENERATED LAUNCH COMMAND]")
         print(build_launch_command(prof, port=args.port))

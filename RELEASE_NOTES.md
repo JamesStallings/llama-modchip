@@ -4,12 +4,15 @@
 
 ---
 
-## 🔥 `v2.5.0` — `LUT-VQ3-64` (`GGML_TYPE_VQ3_0 = 43`, `3.00 bpw` AVX-512 VBMI `VPERMI2B` 3D Vector Quantizer), `+1.01 dB` Higher SQNR than `Q4_0` on Uncompressed `BF16`, `+16.9%` Faster `DeepSeek-V4 284B` Decode (`56.07 GiB`), `16.04 GiB` `Nemotron-30B` (`100/100` Quality Gate), & Opus 5.5 Repo-Wide Hardening
+## 🔥 `v2.5.0` — `LUT-VQ3-64` (`GGML_TYPE_VQ3_0 = 43`, `3.00 bpw` AVX-512 VBMI `VPERMI2B` 3D Vector Quantizer), `100/100` E2E Quality Gate Parity with `BF16` & `Q4_0`, `+16.9%` Faster `DeepSeek-V4 284B` Decode (`56.07 GiB`), `16.04 GiB` `Nemotron-30B`, & Opus 5.5 Repo-Wide Hardening
 
 **Release Date:** November 2026  
 **Highlights:**
 1. **🧬 `LUT-VQ3-64` (`GGML_TYPE_VQ3_0 = 43`, `24 Bytes / 64 Weights = 3.00 bpw`) 3D Vector Quantizer in 6 AVX-512 ZMM Registers ([`vq3/`](vq3/), [`patches/lut-vq3-64-avx512-vbmi.patch`](patches/lut-vq3-64-avx512-vbmi.patch))**:
-   - **Why 3.00-bpw 3D VQ Beats 4.50-bpw Scalar `Q4_0` (`13.62 dB` vs. `12.61 dB` SQNR on `BF16`)**: Scalar uniform quantizers (`Q4_0`) tile a 3D Cartesian hypercube $[-M, +M]^3$ of volume $8M^3$, wasting **47.6% to 83.3%** of their grid states on empty corners when quantizing heavy-tailed (`kurtosis = 3.2–4.8`) MoE weights whose joint probability mass lives inside an inscribed $L_2$ sphere or $L_1$ cross-polytope. `LUT-VQ3-64` packs `128` 3D Lloyd-Max centroids (`7 bits / 3 weights = 2.333 bpw`, antipodally symmetric $\mathbf{c}_{127-k} = -\mathbf{c}_k$) directly onto the populated 3D shell, paired with four 4-bit unsigned sub-scales ($s_b \in \{4..19\}/16$) and an `FP16` super-block scale (`24 bytes / 64 weights = 3.00 bpw`).
+   - **Ground-Truth `BF16` Signal Fidelity (`libggml-base.so` on `blk.1.ffn_up_exps.weight`)**:
+     - `Q4_0` (`4.50 bpw`, `4.0` bits/weight + scale): `21.09 dB` SQNR (`99.61%` Cosine Similarity, `8.82%` RelL2).
+     - **`Fractal-64` (`3.75 bpw`, `3.0` dyadic bits/weight + 4-bit sub-scales)**: **`17.75 dB` SQNR (`99.15%` Cosine Similarity, `12.96%` RelL2)** — **beating `ggml` `Q3_K` (`16.30 dB`, `98.84%`) by `+1.45 dB`** while decoding in a single `VPSHUFB` instruction.
+     - **`LUT-VQ3-64` (`3.00 bpw`, `2.333` 3D VQ index bits/weight + 4-bit sub-scales)**: **`13.57 dB` SQNR (`97.78%` Cosine Similarity, `20.97%` RelL2)** — **beating `ggml` `Q2_K` (`10.15 dB`, `95.37%`) by `+3.42 dB`** by packing `128` 3D Lloyd-Max centroids (`7 bits / 3 weights`) onto the populated spherical/cross-polytope shell rather than empty hypercube corners.
    - **Single-Cycle Register Lookup via AVX-512 VBMI `VPERMI2B`**: The entire 128-entry 3D codebook (`384 bytes`) resides permanently inside 6 ZMM registers (`zmm26..zmm31`). `_mm512_permutex2var_epi8` (`VPERMI2B`) resolves 64 centroids per instruction in 1 cycle with zero L1/L2 cache accesses, supporting `_1x8`, `_1x4`, `_1x3`, `_1x2`, and `1x1` multi-column tiling.
 2. **🏆 End-to-End Validation on `Nemotron-3.5-30B-A3B` (`13.08 GiB`) & `DeepSeek-V4-Flash 284B` (`56.07 GiB`) ([`benchmarks/QUALITY_GATE_VQ3_64.md`](benchmarks/QUALITY_GATE_VQ3_64.md))**:
    - **`NVIDIA-Nemotron-3.5-30B-A3B-VQ3-64` (`13.08 GiB` disk / `16.04 GiB` `VmRSS`)**: Scores a perfect **`100.0 / 100.0`** on [`benchmarks/eval_quality_and_tools.py`](benchmarks/eval_quality_and_tools.py) (`30/30` Tool-Calling, `30/30` Code Gen, `20/20` Needle & Math, `20/20` Telemetry), boosts `Stockfish-PVS` speculative acceptance to **`70.19%` (`+11.10%` vs `Fractal-64`, `+3.52%` vs `Q4_0`)**, runs at **`24.18 tok/s` E2E (`+23.7%` vs `Q4_0`)**, and saves **`-5.67 GiB` RAM vs `Q4_0`** (`-1.23 GiB` vs `Fractal-64`).

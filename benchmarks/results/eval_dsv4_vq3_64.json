@@ -1,0 +1,131 @@
+{
+  "label": "DeepSeek-V4-284B-VQ3-64-56.07GiB",
+  "timestamp": "2026-11-11T06:43:45+0000",
+  "total_score": 84.32,
+  "quality_score_80": 70.0,
+  "suites": {
+    "tools_30": 30.0,
+    "coding_30": 20.0,
+    "needle_math_20": 20.0,
+    "speed_ram_20": 14.32
+  },
+  "telemetry": {
+    "decode_tps": 10.74,
+    "prefill_tps": 37.86,
+    "draft_n": 156,
+    "draft_accepted": 106,
+    "draft_accept_pct": 67.95,
+    "rss_gib": 58.31,
+    "anon_hugepages_gib": 0.0,
+    "score": 14.32,
+    "max": 20.0
+  },
+  "details": {
+    "tools": [
+      {
+        "test": "1.1 Read + Integer Schema Coercion",
+        "score": 6.0,
+        "max": 6.0,
+        "call": {
+          "id": "5fanyg9dmGXvI7LMFcgj4apLnrmTF6E0",
+          "name": "Read",
+          "input": {
+            "file_path": "/opt/app/config.py",
+            "offset": 50,
+            "limit": 25
+          }
+        }
+      },
+      {
+        "test": "1.2 Grep Pattern + Path",
+        "score": 6.0,
+        "max": 6.0,
+        "call": {
+          "id": "acsRo3pG4JDq4tWaIAvvZFu3DTiotxUe",
+          "name": "Grep",
+          "input": {
+            "pattern": "def verify_token",
+            "path": "/src/auth"
+          }
+        }
+      },
+      {
+        "test": "1.3 Edit + Boolean Coercion",
+        "score": 6.0,
+        "max": 6.0,
+        "call": {
+          "id": "yjttfbOpKnRq1VjISjyHpB5H8dHbMjdl",
+          "name": "Edit",
+          "input": {
+            "file_path": "/opt/app/settings.py",
+            "old_string": "DEBUG = True",
+            "new_string": "DEBUG = False",
+            "replace_all": true
+          }
+        }
+      },
+      {
+        "test": "1.4 Write Code Serialization",
+        "score": 6.0,
+        "max": 6.0,
+        "call": {
+          "id": "94spdMz8fVfA1RuESwxpJviUZs3UXpQR",
+          "name": "Write",
+          "input": {
+            "file_path": "/tmp/hello_test.py",
+            "content": "print(\"Hello, World!\")"
+          }
+        }
+      },
+      {
+        "test": "1.5 Multi-Turn Tool Result Consumption",
+        "score": 6.0,
+        "max": 6.0,
+        "call": {
+          "id": "zaAUSv6Mg0vfQ2VMN19QQHSfm2OEL6RQ",
+          "name": "Bash",
+          "input": {
+            "command": "curl http://127.0.0.1:9094/health"
+          }
+        }
+      }
+    ],
+    "coding": [
+      {
+        "test": "2.1 Thread-Safe LRU Cache",
+        "score": 0.0,
+        "max": 10.0,
+        "passed": false,
+        "error": "  File \"/tmp/tmpgmz8hibw.py\", line 1\n    Here's a Python 3 implementation of an LRU cache with thread-safety:\n        ^\nSyntaxError: unterminated string literal (detected at line 1)\n"
+      },
+      {
+        "test": "2.2 Merge Overlapping Intervals",
+        "score": 10.0,
+        "max": 10.0,
+        "passed": true,
+        "error": ""
+      },
+      {
+        "test": "2.3 Fix Binary Search Overflow & Boundary Bug",
+        "score": 10.0,
+        "max": 10.0,
+        "passed": true,
+        "error": ""
+      }
+    ],
+    "needle_math": [
+      {
+        "test": "3.1 Long-Context Needle Retrieval (Code + Port)",
+        "score": 10.0,
+        "max": 10.0,
+        "prompt_tokens": 3049,
+        "prefill_tps": 37.76
+      },
+      {
+        "test": "3.2 Exact Hybrid KV Cache Arithmetic (1536 MiB)",
+        "score": 10.0,
+        "max": 10.0
+      }
+    ]
+  }
+}

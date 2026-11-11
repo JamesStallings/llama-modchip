@@ -20,8 +20,8 @@ powershell -ExecutionPolicy Bypass -File windows\build_patched_engine.ps1
 
 Requirements: Git, CMake, Ninja, MinGW-w64 GCC >= 14 on `PATH`.
 
-The script clones `ggml-org/llama.cpp` at `d2f8305` (the only base `patches/deepseek-v4-flash-fractal-256k.patch`
-applies to cleanly), applies the patch, copies `speculative/cpp/rc_*.h` into `common/`, applies the four
+The script clones `ggml-org/llama.cpp` at `d2f8305` (the base commit for `patches/deepseek-v4-flash-fractal-256k.patch`
+and `patches/lut-vq3-64-avx512-vbmi.patch`), applies the patches, copies `speculative/cpp/rc_*.h` into `common/`, applies the four
 Windows portability fixes and writes `windows/bin-modchip/llama-server.exe` (static, no DLLs).
 
 The fixes, in short:
@@ -38,7 +38,7 @@ The fixes, in short:
 ## 2. Run
 
 ```
-windows\AVVIA_MODCHIP.bat
+windows\AVVIA_DSV4.bat
 ```
 
 Put the three `DeepSeek-V4-Flash-0731-Fractal-*.gguf` shards into `windows\models\` first.

@@ -28,7 +28,7 @@ and loading aborts.
 The shipped scripts (`install.sh`, `modchip`, `scripts/build_zen5_llama.sh`) are Linux/macOS only:
 `taskset`, `/dev/shm/llama_modchip.bin`, `bash`, `sys/mman.h`. The patch itself also contains GCC-only code.
 
-Four source fixes were required (all automated by `BUILD_MODCHIP.ps1`):
+Four source fixes were required (all automated by `windows\build_patched_engine.ps1`):
 
 | # | File | Problem | Fix |
 | :-- | :--- | :--- | :--- |
@@ -42,15 +42,15 @@ One runtime constraint: for `deepseek4`/MLA the KV cache requires **identical K 
 
 ## 3. Build
 
-```
-BUILD_MODCHIP.bat          :: CPU (MinGW-w64, AVX-512)
-BUILD_MODCHIP.bat -Cuda    :: MSVC + CUDA toolkit (optional)
+```powershell
+powershell -ExecutionPolicy Bypass -File windows\build_patched_engine.ps1          # CPU (MinGW-w64, AVX-512)
+powershell -ExecutionPolicy Bypass -File windows\build_patched_engine.ps1 -Cuda    # MSVC + CUDA toolkit (optional)
 ```
 
-The script clones `ggml-org/llama.cpp`, checks out **`d2f8305`** (the only base the
-`deepseek-v4-flash-fractal-256k.patch` applies to cleanly), applies the patch, copies the RouteCrack
+The script clones `ggml-org/llama.cpp`, checks out **`d2f8305`** (the base commit for
+`deepseek-v4-flash-fractal-256k.patch` and `lut-vq3-64-avx512-vbmi.patch`), applies the patches, copies the RouteCrack
 headers (`rc_predictor.h`, `rc_stockfish.h`, `rc_trie_v2.h`) into `common/`, applies the four fixes
-above and produces a statically linked `bin-modchip/llama-server.exe`.
+above and produces a statically linked `windows/bin-modchip/llama-server.exe`.
 
 Key flags: `-DGGML_NATIVE=ON -DGGML_OPENMP=OFF -DBUILD_SHARED_LIBS=OFF
 -DCMAKE_EXE_LINKER_FLAGS=-static -D_WIN32_WINNT=0x0A00`.
@@ -79,7 +79,7 @@ Context scaling: 32K → 6.7, 128K → 6.9, 256K → 6.6 tok/s. The full **1M co
    round-trips PCIe — the synchronisation costs more than the GPU gives back.
 
 Net result: on a 12 GB card this model is faster on CPU alone. A CUDA build is available
-(`BUILD_MODCHIP.bat -Cuda`, MSVC + CUDA 13.5) and works, but is slower; it is kept for experiments.
+(`windows\build_patched_engine.ps1 -Cuda`, MSVC + CUDA) and works, but is slower; it is kept for experiments.
 
 ## 6. Pitfalls found along the way
 
@@ -110,8 +110,6 @@ it is not required to run DeepSeek-V4-Flash.
 
 ## 8. Verdict
 
-The model runs stably on Windows at the hardware limit of this machine:
-**6.3–8.0 tok/s decode, 21 tok/s prefill, up to 1M context, 56.5 GiB in 64 GB RAM.**
-It is not suitable as an interactive coding agent: each step costs 20–200 s, the first one several minutes,
-and output quality at 3.75/1.56 bpw degrades into repetition on open-ended tasks.
-It is usable as a batch tool for long, well-specified jobs.
+The model runs stably on Windows at the hardware limit of this 8-core machine:
+**6.3–8.0 tok/s pure decode (before speculative decoding), 21–22.6 tok/s prefill, up to 1M context, 56.5 GiB in 64 GB RAM.**
+For interactive multi-turn agentic coding workflows (such as Claude Code), pair `llama-server.exe` with `--slot-save-path` (Slot-0 KV snapshot warm-restore) and `gateway/sse_gateway.py` so multi-thousand-token system/tool prefixes are restored in milliseconds rather than re-prefilled on cold starts.

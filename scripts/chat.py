@@ -119,13 +119,17 @@ def detect_active_model(base_url: str) -> Tuple[str, str, str]:
     base_clean = re.sub(r"-0000\d-of-0000\d\.gguf$|\.gguf$", "", base_name, flags=re.IGNORECASE)
     low = base_clean.lower()
     if "deepseek" in low or "dsv4" in low:
-        if "fractal" in low:
+        if "vq3" in low:
+            display = f"{base_clean} (284B MoE / 13.2B Active · LUT-VQ3-64 3.00-bpw + Fractal-64)"
+        elif "fractal" in low:
             display = f"{base_clean} (284B MoE / 13.2B Active · SwiGLU-H2 + Fractal-64 Q2_0)"
         else:
             display = f"{base_clean} (DeepSeek-V4-Flash Hybrid MLA + MoE)"
         return raw_id, display, "DeepSeek-V4-Flash"
     if "nemotron" in low:
-        if "fractal" in low:
+        if "vq3" in low:
+            display = f"{base_clean} (30B MoE / 3B Active · LUT-VQ3-64 3.00-bpw AVX-512 VBMI)"
+        elif "fractal" in low:
             display = f"{base_clean} (30B MoE / 3B Active · Fractal-64 Q2_0)"
         else:
             display = f"{base_clean} (30B Mamba-2 + MoE Hybrid)"
@@ -739,7 +743,11 @@ def run_benchmark_suite(base_url: str) -> None:
     print(f"👉 Share your CPU scorecard: {CYAN}https://github.com/synchopate/llama-modchip/issues/new?template=benchmark.yml{RESET}\n")
 
 
-DEFAULT_CHAT_SYSTEM_PROMPT = "You are a helpful, accurate, and concise AI assistant."
+DEFAULT_CHAT_SYSTEM_PROMPT = (
+    "Sei DeepSeek-V4-Flash (284B MoE / 13.2B attivi), eseguito localmente su CPU AMD Ryzen 9 9955HX (Zen 5) "
+    "tramite llama-modchip con quantizzazione ibrida LUT-VQ3-64 (3.00 bpw AVX-512 VBMI) + Fractal-64 (3.75 bpw). "
+    "Rispondi sempre in italiano in modo naturale, cortese, preciso e conciso."
+)
 
 
 def run_interactive_chat(base_url: str, one_shot_prompt: Optional[str] = None) -> None:

@@ -20,6 +20,7 @@ if (-not $SrcRoot) { $SrcRoot = Join-Path $RepoRoot "workspace" }
 
 $BaseCommit = "d2f83055d6e3b379b5d34c4837122a918cf402c2"
 $PatchFile  = Join-Path $RepoRoot "patches\deepseek-v4-flash-fractal-256k.patch"
+$Vq3Patch   = Join-Path $RepoRoot "patches\lut-vq3-64-avx512-vbmi.patch"
 $HeadersDir = Join-Path $RepoRoot "speculative\cpp"
 $LlamaDir   = Join-Path $SrcRoot "llama.cpp-src"
 $OutDir     = Join-Path $WindowsDir "bin-modchip"
@@ -58,6 +59,12 @@ try {
     Write-Host "[*] Applying patches\deepseek-v4-flash-fractal-256k.patch ..." -ForegroundColor Cyan
     & $git apply $PatchFile
     if ($LASTEXITCODE -ne 0) { Fail "Patch does not apply. Expected llama.cpp at $BaseCommit." }
+
+    if (Test-Path $Vq3Patch) {
+        Write-Host "[*] Applying patches\lut-vq3-64-avx512-vbmi.patch (LUT-VQ3-64 VQ3_0) ..." -ForegroundColor Cyan
+        & $git apply $Vq3Patch
+        if ($LASTEXITCODE -ne 0) { Fail "LUT-VQ3-64 patch does not apply." }
+    }
 
     Write-Host "[*] Copying RouteCrack headers into common\ ..." -ForegroundColor Cyan
     foreach ($h in "rc_predictor.h", "rc_stockfish.h", "rc_trie_v2.h") {

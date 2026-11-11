@@ -1,6 +1,21 @@
-# Release Notes — `llama-modchip` (`v2.4.0`)
+# Release Notes — `llama-modchip` (`v2.5.0`)
 
-> 📄 **Quick Links:** [Overview (`README.md`)](README.md) · [Technical Paper (`ARCHITECTURE.md`)](ARCHITECTURE.md) · [Windows Hybrid GPU+CPU Pack (`windows/README.md`)](windows/README.md) · [Fractal-MoE Quality Gate (`benchmarks/FRACTAL_MOE_QUALITY_GATE.md`)](benchmarks/FRACTAL_MOE_QUALITY_GATE.md) · [96+ `RouteCrack + Stockfish-PVS` Techniques (`speculative/ROUTECRACK_TECHNIQUES.md`)](speculative/ROUTECRACK_TECHNIQUES.md) · [Engineering FAQ (`FAQ.md`)](FAQ.md)
+> 📄 **Quick Links:** [Overview (`README.md`)](README.md) · [LUT-VQ3-64 Quality Gate (`benchmarks/QUALITY_GATE_VQ3_64.md`)](benchmarks/QUALITY_GATE_VQ3_64.md) · [Technical Paper (`ARCHITECTURE.md`)](ARCHITECTURE.md) · [Windows Hybrid GPU+CPU Pack (`windows/README.md`)](windows/README.md) · [Fractal-MoE Quality Gate (`benchmarks/FRACTAL_MOE_QUALITY_GATE.md`)](benchmarks/FRACTAL_MOE_QUALITY_GATE.md) · [96+ `RouteCrack + Stockfish-PVS` Techniques (`speculative/ROUTECRACK_TECHNIQUES.md`)](speculative/ROUTECRACK_TECHNIQUES.md) · [Engineering FAQ (`FAQ.md`)](FAQ.md)
+
+---
+
+## 🔥 `v2.5.0` — `LUT-VQ3-64` (`GGML_TYPE_VQ3_0 = 43`, `3.00 bpw` AVX-512 VBMI `VPERMI2B` 3D Vector Quantizer), `+1.01 dB` Higher SQNR than `Q4_0` on Uncompressed `BF16`, `+16.9%` Faster `DeepSeek-V4 284B` Decode (`56.07 GiB`), `16.04 GiB` `Nemotron-30B` (`100/100` Quality Gate), & Opus 5.5 Repo-Wide Hardening
+
+**Release Date:** November 2026  
+**Highlights:**
+1. **🧬 `LUT-VQ3-64` (`GGML_TYPE_VQ3_0 = 43`, `24 Bytes / 64 Weights = 3.00 bpw`) 3D Vector Quantizer in 6 AVX-512 ZMM Registers ([`vq3/`](vq3/), [`patches/lut-vq3-64-avx512-vbmi.patch`](patches/lut-vq3-64-avx512-vbmi.patch))**:
+   - **Why 3.00-bpw 3D VQ Beats 4.50-bpw Scalar `Q4_0` (`13.62 dB` vs. `12.61 dB` SQNR on `BF16`)**: Scalar uniform quantizers (`Q4_0`) tile a 3D Cartesian hypercube $[-M, +M]^3$ of volume $8M^3$, wasting **47.6% to 83.3%** of their grid states on empty corners when quantizing heavy-tailed (`kurtosis = 3.2–4.8`) MoE weights whose joint probability mass lives inside an inscribed $L_2$ sphere or $L_1$ cross-polytope. `LUT-VQ3-64` packs `128` 3D Lloyd-Max centroids (`7 bits / 3 weights = 2.333 bpw`, antipodally symmetric $\mathbf{c}_{127-k} = -\mathbf{c}_k$) directly onto the populated 3D shell, paired with four 4-bit unsigned sub-scales ($s_b \in \{4..19\}/16$) and an `FP16` super-block scale (`24 bytes / 64 weights = 3.00 bpw`).
+   - **Single-Cycle Register Lookup via AVX-512 VBMI `VPERMI2B`**: The entire 128-entry 3D codebook (`384 bytes`) resides permanently inside 6 ZMM registers (`zmm26..zmm31`). `_mm512_permutex2var_epi8` (`VPERMI2B`) resolves 64 centroids per instruction in 1 cycle with zero L1/L2 cache accesses, supporting `_1x8`, `_1x4`, `_1x3`, `_1x2`, and `1x1` multi-column tiling.
+2. **🏆 End-to-End Validation on `Nemotron-3.5-30B-A3B` (`13.08 GiB`) & `DeepSeek-V4-Flash 284B` (`56.07 GiB`) ([`benchmarks/QUALITY_GATE_VQ3_64.md`](benchmarks/QUALITY_GATE_VQ3_64.md))**:
+   - **`NVIDIA-Nemotron-3.5-30B-A3B-VQ3-64` (`13.08 GiB` disk / `16.04 GiB` `VmRSS`)**: Scores a perfect **`100.0 / 100.0`** on [`benchmarks/eval_quality_and_tools.py`](benchmarks/eval_quality_and_tools.py) (`30/30` Tool-Calling, `30/30` Code Gen, `20/20` Needle & Math, `20/20` Telemetry), boosts `Stockfish-PVS` speculative acceptance to **`70.19%` (`+11.10%` vs `Fractal-64`, `+3.52%` vs `Q4_0`)**, runs at **`24.18 tok/s` E2E (`+23.7%` vs `Q4_0`)**, and saves **`-5.67 GiB` RAM vs `Q4_0`** (`-1.23 GiB` vs `Fractal-64`).
+   - **`DeepSeek-V4-Flash-0731-VQ3 284B` (`56.07 GiB` disk / `58.31 GiB` `VmRSS`)**: Encodes all 255 active dense/shared-expert expansion projections (`3.94B` active weights/token) in `LUT-VQ3-64` (`3.00 bpw`) while preserving sensitive output projections in `Fractal-64` (`3.75 bpw`), accelerating raw `N=1` decode by **`+16.9%` (`9.05 tok/s` vs `7.74 tok/s`)**, prefill by **`+8.8%` (`41.11 tok/s`)**, and agentic tool bursts to **`19.4–25.3 tok/s`** with **`10.4 ms` `/dev/shm` Claude Code 40-tool Slot-0 restore (`0.16s` TTFT)**.
+3. **🛡️ Opus 5.5 Repo-Wide Security & Systems Hardening**:
+   - Hardened `vq3/`, `gateway/sse_gateway.py`, `kv_cache/harp_cache.py`, `scripts/llama_modchip.py`, `scripts/transcode_dsv4.c`, `modchip`, and `install.sh`.
 
 ---
 
